@@ -7,7 +7,7 @@ const WEB1=['gov.bd'];
 const WEB2=['bangladesh.gov.bd','mofa.gov.bd','bmet.gov.bd','probashi.gov.bd','wewb.gov.bd','mygov.bd','nidw.gov.bd','services.nidw.gov.bd','epassport.gov.bd','dip.gov.bd','nbr.gov.bd','brta.gov.bd','bdris.gov.bd','land.gov.bd','dncc.gov.bd','dscc.gov.bd','a2i.gov.bd'];
 async function web(messages,l){const mk=d=>({system:WSYS(l),messages,max:1000,tools:[{type:'web_search_20250305',name:'web_search',max_uses:3,allowed_domains:d}]});
  let r=await claude(mk(WEB1));if(r.error&&r.error!=='no_key'&&r.error!=='network')r=await claude(mk(WEB2));return r}
-export async function POST(req){if(limited(req))return Response.json({fallback:true,error:'rate'},{status:429});
+export async function POST(req){const errs=[];if(limited(req))return Response.json({fallback:true,error:'rate'},{status:429});
  const {question='',lang='bn',chunks=[],history=[],loc=''}=await req.json();const q=String(question).slice(0,500);
  let h=history.slice(-6).filter(m=>m&&m.content&&['user','assistant'].includes(m.role)).map(m=>({role:m.role,content:String(m.content).slice(0,600)}));while(h.length&&h[0].role!=='user')h.shift();
  const hist=[];h.forEach(m=>{const l=hist[hist.length-1];if(l&&l.role===m.role)l.content+='\n'+m.content;else hist.push(m)});if(hist.length&&hist[hist.length-1].role==='user')hist.pop();
@@ -15,7 +15,7 @@ export async function POST(req){if(limited(req))return Response.json({fallback:t
  if(real.length){const src=real.slice(0,4).map(c=>`[${c.id}] ${c.title}\nOffice: ${c.office}\n${String(c.text).slice(0,3000)}`).join('\n\n');
   const r=await claude({system:SYS(lang),messages:[...hist,{role:'user',content:`SOURCES:\n${src}\n\nQUESTION: ${q}`}],max:700});
   if(r.error==='no_key'||r.error==='network')return Response.json({fallback:true});
-  const j=!r.error&&parse(r.text);if(j){ids=(j.source_ids||[]).filter(id=>real.some(c=>c.id===id));kbj=j;
+  if(r.error)errs.push('kb:'+r.error);const j=!r.error&&parse(r.text);if(j){ids=(j.source_ids||[]).filter(id=>real.some(c=>c.id===id));kbj=j;
    if(ids.length&&j.confidence!=='low'&&!j.needs_human)return Response.json({mode:'kb',answer:String(j.answer),source_ids:ids,confidence:j.confidence,needs_human:false,trace:{route:'kb',model:r.model,retrieved:real.slice(0,4).map(c=>c.id),used:ids}})}}
  const wr=await web([...hist,{role:'user',content:q+(loc?`\n(User's area: ${loc})`:'')}],lang);
  if(wr.error==='no_key'||wr.error==='network')return Response.json({fallback:true});
@@ -23,7 +23,8 @@ export async function POST(req){if(limited(req))return Response.json({fallback:t
   if(wr.cites.length&&conf!=='low'&&ans)return Response.json({mode:'web',answer:ans,cites:wr.cites.slice(0,4),confidence:conf,needs_human:false,trace:{route:'web',model:wr.model,retrieved:real.slice(0,4).map(c=>c.id),used:[],kb_insufficient:real.length>0}})}
  {const src=real.length?'SOURCES (may be incomplete):\n'+real.slice(0,3).map(c=>`[${c.id}] ${c.title}\n${String(c.text).slice(0,1500)}`).join('\n\n')+'\n\n':'';
   const gr=await claude({system:GSYS(lang),messages:[...hist,{role:'user',content:src+'QUESTION: '+q+(loc?`\n(User's area: ${loc})`:'')}],max:700});
+  if(gr.error)errs.push('gen:'+gr.error);
   if(!gr.error&&gr.text){const m=/CONF:\s*(medium|low|high)/i.exec(gr.text);const conf=m&&m[1].toLowerCase()==='medium'?'medium':'low';const ans=gr.text.replace(/CONF:\s*(high|medium|low)/ig,'').trim();
    if(ans)return Response.json({mode:'general',answer:ans,source_ids:[],confidence:conf,needs_human:conf==='low',trace:{route:'general',model:gr.model,retrieved:real.slice(0,4).map(c=>c.id),used:[]}})}}
  if(kbj&&kbj.answer)return Response.json({mode:'kb',answer:String(kbj.answer),source_ids:ids,confidence:'low',needs_human:true,trace:{route:'kb-low',model:MODELS.main,retrieved:real.slice(0,4).map(c=>c.id),used:ids}});
- return Response.json({mode:'none',answer:lang==='en'?"I'm not sure. I could not find a clear official answer. Please contact the responsible office or call the 333 helpline.":'আমি নিশ্চিত নই। স্পষ্ট সরকারি উত্তর খুঁজে পাইনি। দায়িত্বপ্রাপ্ত অফিসে যোগাযোগ করুন বা ৩৩৩ হেল্পলাইনে ফোন করুন।',source_ids:[],confidence:'low',needs_human:true,trace:{route:'none',model:null,retrieved:real.slice(0,4).map(c=>c.id),used:[]}})}
+ return Response.json({mode:'none',answer:(process.env.DEBUG_AI&&errs.length?'[debug '+errs.join(' | ')+'] ':'')+(lang==='en'?"I'm not sure. I could not find a clear official answer. Please contact the responsible office or call the 333 helpline.":'আমি নিশ্চিত নই। স্পষ্ট সরকারি উত্তর খুঁজে পাইনি। দায়িত্বপ্রাপ্ত অফিসে যোগাযোগ করুন বা ৩৩৩ হেল্পলাইনে ফোন করুন।'),source_ids:[],confidence:'low',needs_human:true,trace:{route:'none',model:null,retrieved:real.slice(0,4).map(c=>c.id),used:[]}})}
